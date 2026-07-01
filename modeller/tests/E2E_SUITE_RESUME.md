@@ -111,6 +111,26 @@ VISIBLE (readPixels), REVERSIBLE (undo restores cursor + geometry), verifyChain 
 
 ---
 
+## ✅ §HANDOFF-RESOLVED (2026-07-01, next session) — Modeller guide INTEGRATED, gates 1–3 CLOSED
+The three GATING items below are **DONE** — do NOT redo them. Shipped as **bim-compiler PR #10**
+(`docs/modeller-guide-integrate` → base `docs/hba-guide-rewrite`, built on the live tip `0967ebcdd`):
+- **Gate 1 (stale base):** integrated the revamp (`6190ba996`) directly onto the live hba tip — no false
+  "deletes Teams" collision. 20 real E2E frames under `docs/img/modeller/` (all refs resolve; `mkdocs
+  build --strict` = 0).
+- **Gate 2 (dropped Teams link):** RESTORED `§Collaborate — the Teams overlay` → `TeamsOverlayGuide.md`.
+- **Gate 3 (orphan):** DELETED `ModellerUserGuide.md` (0 inbound links, broken img refs), collapsed the two
+  near-duplicate nav lines to ONE (`ModellerGuide.md`). Front door `USER_GUIDE.md` already traced there.
+- The HR + Teams + Icons lanes were already landed on the live tip `0967ebcdd` — the Modeller guide was the
+  only outstanding docs slice, so no multi-agent fan-out was needed.
+- **⚠ STILL OUTWARD-FACING (user triggers):** merge PR #10, then deploy via
+  `ALLOW_SHRINK=1 paths="ModellerUserGuide/" scripts/safe_gh_deploy.sh` (the orphan deletion removes a live
+  gh-pages page → the no-shrink seatbelt will ABORT unless the removal is blessed).
+- **Deferred polish (NOT gating):** §F#1 full Getting-started→Troubleshooting scaffold, §F#2 recapture frames
+  from the LIVE app at `deviceScaleFactor:2` (current 20 are functional headless-swiftshader captures),
+  §F#4 Move/Walk `shot()` frames. Improvements, not blockers.
+
+---
+
 ## §HANDOFF — state at session close (2026-07-01) + the multi-agent orchestration plan (REVIEW FIRST)
 
 ### What is DONE + pushed (do NOT redo)
