@@ -57,6 +57,15 @@
   // §ROOM-FORM: openM = unsealed perimeter metres; more than OPEN_PERIM_FACTOR × median door width
   //   of unsealed edge is not "fully enclosed" → SUSPECT_OPEN; no adjacent door → SUSPECT_NO_DOOR.
   var OPEN_PERIM_FACTOR = 2.0;
+  // §MULTI-RECT (ROOM_INJECTION_HYBRID.md §8, 2026-07-11): ONE inscribed rectangle under-covers a
+  // non-rectangular room (measured single-rect coverage down to 0.23 on real Hospital/Clinic/
+  // Terminal rooms). A confirmed room is a SET of non-overlapping rectangles carved from its
+  // (seal-band-recovered) region by a repeated constrained maximal-rectangle scan. Knobs are
+  // grid-derived: RECT_COVER_TARGET (remainder past 0.95 is sub-noise-floor stair-step fringe),
+  // sub-rect min dimension = NOISE_FLOOR_DIM, MAX_SUBRECTS = pure safety bound.
+  // SUSPECT rooms stay single-rect (decomposition applies to confirmed rooms only).
+  var RECT_COVER_TARGET = 0.95;
+  var MAX_SUBRECTS = 8;
   // §DOOR-PARTITION: on some real buildings (HHS confirmed) wall-enclosure flood-fill structurally
   // can't find rooms — most of the floor floods as one exterior-reachable blob because the walls that
   // would divide individual rooms simply aren't in this extraction. Gate: compare what flood-fill
@@ -93,7 +102,7 @@
   function doorStats(db) {
     var rows = _rows(db, "SELECT COALESCE(t.bbox_x,0) bx, COALESCE(t.bbox_y,0) by2, COALESCE(t.bbox_z,0) bz " +
       "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
-      "WHERE m.ifc_class LIKE 'IfcDoor%' AND t.center_x IS NOT NULL");
+      "WHERE m.ifc_class LIKE 'IfcDoor%' AND m.discipline='ARC' AND t.center_x IS NOT NULL");
     var ws = [], hs = [];
     rows.forEach(function (r) {
       var w = Math.max(r.bx, r.by2);
@@ -109,7 +118,7 @@
   function storeyZAnchors(db) {
     var rows = _rows(db, "SELECT m.storey st, t.center_z cz FROM elements_meta m " +
       "JOIN element_transforms t ON t.guid=m.guid " +
-      "WHERE m.ifc_class LIKE 'IfcWall%' AND t.center_x IS NOT NULL " +
+      "WHERE m.ifc_class LIKE 'IfcWall%' AND m.discipline='ARC' AND t.center_x IS NOT NULL " +
       "AND m.storey IS NOT NULL AND m.storey <> 'Unknown'");
     var acc = {};
     rows.forEach(function (r) { (acc[r.st] = acc[r.st] || []).push(r.cz); });
@@ -133,17 +142,23 @@
 
   function storeyWalls(db, vertMin, anchors) {
     vertMin = vertMin || 0.0;
+    // §DISC-ARC: room enclosure is an ARCHITECTURAL concept — discipline='ARC' on every element
+    // query here, not just ifc_class LIKE. WalkerDoctrine.md: "discipline is a WHERE column."
+    // Real gap found (2026-07-11): a raw multi-discipline extract (deploy/buildings/*_extracted.db,
+    // not ARC-only stripped) carries STR-discipline IfcColumn/IfcWallStandardCase/IfcMember/IfcPlate
+    // rows that also match WALL_LIKE/CW_CHILD_CLASSES ifc_class patterns — structural framing, not
+    // room-enclosing walls — and without this filter they silently pollute the raster.
     var cond = WALL_LIKE.map(function (p) { return "m.ifc_class LIKE '" + p + "'"; }).join(' OR ');
     var rows = _rows(db, "SELECT m.storey, t.center_x,t.center_y,t.center_z, t.bbox_x,t.bbox_y,t.bbox_z " +
       "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
-      "WHERE (" + cond + ") AND t.center_x IS NOT NULL");
+      "WHERE (" + cond + ") AND m.discipline='ARC' AND t.center_x IS NOT NULL");
     // §WALL-VERT: curtain-wall children (IfcMember/IfcPlate) that stand wall-height — the enclosure
     // the bare WALL_LIKE query misses because IfcCurtainWall parents have no transform of their own.
     if (vertMin > 0) {
       var inList = CW_CHILD_CLASSES.map(function (c) { return "'" + c + "'"; }).join(',');
       rows = rows.concat(_rows(db, "SELECT m.storey, t.center_x,t.center_y,t.center_z, t.bbox_x,t.bbox_y,t.bbox_z " +
         "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
-        "WHERE m.ifc_class IN (" + inList + ") AND t.center_x IS NOT NULL AND t.bbox_z >= " + vertMin));
+        "WHERE m.ifc_class IN (" + inList + ") AND m.discipline='ARC' AND t.center_x IS NOT NULL AND t.bbox_z >= " + vertMin));
     }
     anchors = anchors || {};
     var anchorNames = Object.keys(anchors).sort();
@@ -160,7 +175,7 @@
     var cond = STAIR_LIKE.map(function (p) { return "m.ifc_class LIKE '" + p + "'"; }).join(' OR ');
     var rows = _rows(db, "SELECT m.storey, t.center_x,t.center_y, t.bbox_x,t.bbox_y " +
       "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
-      "WHERE (" + cond + ") AND t.center_x IS NOT NULL");
+      "WHERE (" + cond + ") AND m.discipline='ARC' AND t.center_x IS NOT NULL");
     var by = {};
     rows.forEach(function (r) {
       var st = r.storey || 'Unknown';
@@ -176,7 +191,7 @@
     var rows = _rows(db, "SELECT m.storey, m.element_name en, t.center_x,t.center_y, t.center_z, " +
       "COALESCE(t.bbox_x,0) bbox_x, COALESCE(t.bbox_y,0) bbox_y " +
       "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
-      "WHERE m.ifc_class LIKE 'IfcDoor%' AND t.center_x IS NOT NULL");
+      "WHERE m.ifc_class LIKE 'IfcDoor%' AND m.discipline='ARC' AND t.center_x IS NOT NULL");
     anchors = anchors || {};
     var anchorNames = Object.keys(anchors).sort();
     var by = {};
@@ -362,32 +377,104 @@
     return [bi0, bi1, bj0, bj1];
   }
 
-  // §RECT-HONESTY: grow the inscribed rect back to its real walls — each side extends while the
-  // next full line is raw-free, max `steps` cells (the dilation erosion bound). x sides first (using
-  // the original j span), then y sides (using the expanded i span) — fixed order for parity.
-  function _expandRect(raw, nx, ny, i0, i1, j0, j1, steps) {
-    var s, j, i, ok;
-    for (s = 0; s < steps; s++) {
-      ok = i0 > 0;
-      if (ok) for (j = j0; j <= j1; j++) if (raw[(i0 - 1) * ny + j] !== 0) { ok = false; break; }
-      if (ok) i0--; else break;
+  // §MULTI-RECT: recover the SEAL erosion — grow the region up to `steps` layers into cells that
+  // are raw-free but dilation-blocked (the band between the region and its real walls). Never grows
+  // into other free space (exterior / another pocket), so every grown cell is this room's own floor.
+  // Mutates inSet; returns { added, mni, mxi, mnj, mxj } with bounds covering the growth.
+  function _growRegion(cells, inSet, raw, dil, nx, ny, steps) {
+    var frontier = cells;
+    var added = [];
+    var mni = Math.floor(cells[0] / ny), mxi = mni, mnj = cells[0] % ny, mxj = mnj;
+    for (var c = 0; c < cells.length; c++) {
+      var i0 = Math.floor(cells[c] / ny), j0 = cells[c] % ny;
+      if (i0 < mni) mni = i0; if (i0 > mxi) mxi = i0;
+      if (j0 < mnj) mnj = j0; if (j0 > mxj) mxj = j0;
     }
-    for (s = 0; s < steps; s++) {
-      ok = i1 < nx - 1;
-      if (ok) for (j = j0; j <= j1; j++) if (raw[(i1 + 1) * ny + j] !== 0) { ok = false; break; }
-      if (ok) i1++; else break;
+    var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var s = 0; s < steps; s++) {
+      var nxt = [];
+      for (var f = 0; f < frontier.length; f++) {
+        var k = frontier[f];
+        var i = Math.floor(k / ny), j = k % ny;
+        for (var d = 0; d < 4; d++) {
+          var a = i + dirs[d][0], b = j + dirs[d][1];
+          if (a >= 0 && a < nx && b >= 0 && b < ny) {
+            var kk = a * ny + b;
+            if (!inSet[kk] && !raw[kk] && dil[kk]) {
+              inSet[kk] = 1; nxt.push(kk); added.push(kk);
+              if (a < mni) mni = a; if (a > mxi) mxi = a;
+              if (b < mnj) mnj = b; if (b > mxj) mxj = b;
+            }
+          }
+        }
+      }
+      frontier = nxt;
     }
-    for (s = 0; s < steps; s++) {
-      ok = j0 > 0;
-      if (ok) for (i = i0; i <= i1; i++) if (raw[i * ny + (j0 - 1)] !== 0) { ok = false; break; }
-      if (ok) j0--; else break;
+    return { added: added, mni: mni, mxi: mxi, mnj: mnj, mxj: mxj };
+  }
+
+  // §MULTI-RECT: constrained maximal rectangle — both dims >= minCells (the NOISE_FLOOR in cells;
+  // a thinner rect is rasterization fringe, not room space). Null if no such rect exists.
+  // Same deterministic scan order / strict '>' tie-break as _inscribedRect.
+  function _inscribedRectMin(inSet, ny, mni, mxi, mnj, mxj, minCells) {
+    var w = mxi - mni + 1, h = mxj - mnj + 1;
+    var hist = new Array(h);
+    for (var z = 0; z < h; z++) hist[z] = 0;
+    var bestArea = 0, best = null;
+    for (var i = 0; i < w; i++) {
+      for (var j = 0; j < h; j++) {
+        hist[j] = inSet[(mni + i) * ny + (mnj + j)] ? hist[j] + 1 : 0;
+      }
+      var stk = [];
+      for (var j2 = 0; j2 <= h; j2++) {
+        var cur = j2 < h ? hist[j2] : 0;
+        while (stk.length && hist[stk[stk.length - 1]] >= cur) {
+          var top = stk.pop();
+          var height = hist[top];
+          var left = stk.length ? stk[stk.length - 1] + 1 : 0;
+          var width = j2 - left;
+          if (height >= minCells && width >= minCells) {
+            var area = height * width;
+            if (area > bestArea) {
+              bestArea = area;
+              best = [mni + i - height + 1, mni + i, mnj + left, mnj + j2 - 1];
+            }
+          }
+        }
+        stk.push(j2);
+      }
     }
-    for (s = 0; s < steps; s++) {
-      ok = j1 < ny - 1;
-      if (ok) for (i = i0; i <= i1; i++) if (raw[i * ny + (j1 + 1)] !== 0) { ok = false; break; }
-      if (ok) j1++; else break;
+    return best;
+  }
+
+  // §MULTI-RECT: carve the region into non-overlapping rectangles — repeated constrained
+  // maximal-rectangle scan, stopping at RECT_COVER_TARGET coverage / MAX_SUBRECTS / no rect left
+  // above the noise floor. `single` (SUSPECT rooms) emits the first rect only. Clears carved cells
+  // from inSet (caller resets the full region afterwards). Falls back to the unconstrained single
+  // rect when the region is too small/thin for a 3x3 (door-rescued slivers).
+  // Returns { rects, covered }.
+  function _decomposeRegion(inSet, ny, mni, mxi, mnj, mxj, totalCells, single) {
+    var minCells = Math.round(NOISE_FLOOR_DIM / RES);
+    var rects = [];
+    var covered = 0;
+    for (var t = 0; t < MAX_SUBRECTS; t++) {
+      var r = _inscribedRectMin(inSet, ny, mni, mxi, mnj, mxj, minCells);
+      if (r === null) break;
+      rects.push(r);
+      for (var i = r[0]; i <= r[1]; i++) {
+        var base = i * ny;
+        for (var j = r[2]; j <= r[3]; j++) inSet[base + j] = 0;
+      }
+      covered += (r[1] - r[0] + 1) * (r[3] - r[2] + 1);
+      if (single) break;
+      if (covered >= RECT_COVER_TARGET * totalCells) break;
     }
-    return [i0, i1, j0, j1];
+    if (!rects.length) {
+      var fb = _inscribedRect(inSet, ny, mni, mxi, mnj, mxj);
+      rects.push(fb);
+      covered = (fb[1] - fb[0] + 1) * (fb[3] - fb[2] + 1);
+    }
+    return { rects: rects, covered: covered };
   }
 
   // §ROOM-FORM: user doctrine 'a room must be well formed, fully enclosed, has door'.
@@ -455,20 +542,30 @@
         // not a room. Drop it.
         var sf = stairOverlapFrac(wx0, wy0, wx1, wy1, stairs);
         if (sf >= STAIR_OVERLAP_REJECT) continue;
-        // §ROOM-FORM + §RECT-HONESTY (ROOM_INJECTION_HYBRID.md §7)
+        // §ROOM-FORM + §RECT-HONESTY + §MULTI-RECT (ROOM_INJECTION_HYBRID.md §7/§8)
         var c2;
         for (c2 = 0; c2 < comp.length; c2++) inSet[comp[c2]] = 1;
         var openM = _openPerimeterM(comp, inSet, raw, dil, nx, ny, SEAL);
-        var ir = _inscribedRect(inSet, ny, mni, mxi, mnj, mxj);
+        var suspect = _classify(hasDoor, openM, doorWMed);
+        var gr = _growRegion(comp, inSet, raw, dil, nx, ny, SEAL);
+        var totalCells = comp.length + gr.added.length;
+        var dec = _decomposeRegion(inSet, ny, gr.mni, gr.mxi, gr.mnj, gr.mxj, totalCells, !!suspect);
         for (c2 = 0; c2 < comp.length; c2++) inSet[comp[c2]] = 0;
-        ir = _expandRect(raw, nx, ny, ir[0], ir[1], ir[2], ir[3], SEAL);
-        var rx0 = xs0 + ir[0] * RES, rx1 = xs0 + (ir[1] + 1) * RES;
-        var ry0 = ys0 + ir[2] * RES, ry1 = ys0 + (ir[3] + 1) * RES;
+        for (c2 = 0; c2 < gr.added.length; c2++) inSet[gr.added[c2]] = 0;
+        var rects = [];
+        for (c2 = 0; c2 < dec.rects.length; c2++) {
+          var gRect = dec.rects[c2];
+          var rx0 = xs0 + gRect[0] * RES, rx1 = xs0 + (gRect[1] + 1) * RES;
+          var ry0 = ys0 + gRect[2] * RES, ry1 = ys0 + (gRect[3] + 1) * RES;
+          rects.push({ cx: (rx0 + rx1) / 2, cy: (ry0 + ry1) / 2, sx: rx1 - rx0, sy: ry1 - ry0 });
+        }
+        var r0 = dec.rects[0];
+        var cover1 = ((r0[1] - r0[0] + 1) * (r0[3] - r0[2] + 1)) / totalCells;
         rooms.push({
-          cx: (rx0 + rx1) / 2, cy: (ry0 + ry1) / 2, cz: cz,
-          sx: rx1 - rx0, sy: ry1 - ry0, sz: Math.max(bz, 2.0), area: area,
-          door_rescued: doorRescued, open_m: openM,
-          suspect: _classify(hasDoor, openM, doorWMed)
+          cx: rects[0].cx, cy: rects[0].cy, cz: cz,
+          sx: rects[0].sx, sy: rects[0].sy, sz: Math.max(bz, 2.0), area: area,
+          door_rescued: doorRescued, open_m: openM, suspect: suspect,
+          rects: rects, cover1: cover1, cover_n: dec.covered / totalCells
         });
       }
     }
@@ -545,21 +642,29 @@
       if ((wx1 - wx0) < NOISE_FLOOR_DIM || (wy1 - wy0) < NOISE_FLOOR_DIM) return;
       if (area > MAX_AREA_ABS || area > planArea * MAX_AREA_FRAC) return;
       if (stairOverlapFrac(wx0, wy0, wx1, wy1, stairs) >= STAIR_OVERLAP_REJECT) return;
-      // §ROOM-FORM + §RECT-HONESTY (ROOM_INJECTION_HYBRID.md §7). No dilation on this path →
-      // sealSteps=0 for the openM march, no outward expansion (claims already touch raw walls).
+      // §ROOM-FORM + §RECT-HONESTY + §MULTI-RECT (ROOM_INJECTION_HYBRID.md §7/§8). No dilation on
+      // this path → sealSteps=0 for the openM march, no seal band to grow back into.
       var c2;
       for (c2 = 0; c2 < cells.length; c2++) inSet[cells[c2]] = 1;
       var openM = _openPerimeterM(cells, inSet, raw, raw, nx, ny, 0);
-      var ir = _inscribedRect(inSet, ny, mni, mxi, mnj, mxj);
-      for (c2 = 0; c2 < cells.length; c2++) inSet[cells[c2]] = 0;
-      var rx0 = xs0 + ir[0] * RES, rx1 = xs0 + (ir[1] + 1) * RES;
-      var ry0 = ys0 + ir[2] * RES, ry1 = ys0 + (ir[3] + 1) * RES;
       var hasDoor = doorAdjacent(wx0, wy0, wx1, wy1, doors);
+      var suspect = _classify(hasDoor, openM, doorWMed);
+      var dec = _decomposeRegion(inSet, ny, mni, mxi, mnj, mxj, cells.length, !!suspect);
+      for (c2 = 0; c2 < cells.length; c2++) inSet[cells[c2]] = 0;
+      var rects = [];
+      for (c2 = 0; c2 < dec.rects.length; c2++) {
+        var gRect = dec.rects[c2];
+        var rx0 = xs0 + gRect[0] * RES, rx1 = xs0 + (gRect[1] + 1) * RES;
+        var ry0 = ys0 + gRect[2] * RES, ry1 = ys0 + (gRect[3] + 1) * RES;
+        rects.push({ cx: (rx0 + rx1) / 2, cy: (ry0 + ry1) / 2, sx: rx1 - rx0, sy: ry1 - ry0 });
+      }
+      var r0 = dec.rects[0];
+      var cover1 = ((r0[1] - r0[0] + 1) * (r0[3] - r0[2] + 1)) / cells.length;
       rooms.push({
-        cx: (rx0 + rx1) / 2, cy: (ry0 + ry1) / 2, cz: cz,
-        sx: rx1 - rx0, sy: ry1 - ry0, sz: Math.max(bz, 2.0), area: area,
+        cx: rects[0].cx, cy: rects[0].cy, cz: cz,
+        sx: rects[0].sx, sy: rects[0].sy, sz: Math.max(bz, 2.0), area: area,
         door_rescued: false, door_partitioned: true, open_m: openM,
-        suspect: _classify(hasDoor, openM, doorWMed)
+        suspect: suspect, rects: rects, cover1: cover1, cover_n: dec.covered / cells.length
       });
     });
     return rooms;
@@ -649,9 +754,9 @@
     if (!hasTable) {
       db.run("CREATE TABLE spatial_structure (guid TEXT, type TEXT, name TEXT, parent_guid TEXT, " +
         "object_type TEXT, predefined_type TEXT, center_x REAL, center_y REAL, center_z REAL, " +
-        "size_x REAL, size_y REAL, size_z REAL)");
+        "size_x REAL, size_y REAL, size_z REAL, room_guid TEXT)");
     } else {
-      ['center_x', 'center_y', 'center_z', 'size_x', 'size_y', 'size_z', 'object_type', 'predefined_type']
+      ['center_x', 'center_y', 'center_z', 'size_x', 'size_y', 'size_z', 'object_type', 'predefined_type', 'room_guid']
         .forEach(function (col) {
           try { db.run('ALTER TABLE spatial_structure ADD COLUMN ' + col + (col.indexOf('center') === 0 || col.indexOf('size') === 0 ? ' REAL' : ' TEXT')); }
           catch (e) { /* already exists — fine */ }
@@ -669,7 +774,8 @@
     // remove any prior compiled rooms (idempotent)
     db.run("DELETE FROM spatial_structure WHERE type='IfcSpace' AND guid LIKE 'RM\\_%' ESCAPE '\\'");
     var roomStmt = db.prepare("INSERT INTO spatial_structure (guid,type,name,parent_guid,object_type,predefined_type," +
-      "center_x,center_y,center_z,size_x,size_y,size_z) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+      "center_x,center_y,center_z,size_x,size_y,size_z,room_guid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    var rectRows = 0;
     allrooms.forEach(function (r) {
       // predefined_type distinguishes which compile technique found each room, for traceability —
       // object_type stays 'COMPILED' either way (the tag spacesOf()'s exclusion filter keys on).
@@ -677,7 +783,16 @@
       // and is carried as a review candidate, not as a trusted room.
       var ptype = r.suspect ? ('SUSPECT_' + r.suspect) :
         r.door_partitioned ? 'INTERNAL_DOORPART' : r.door_rescued ? 'INTERNAL_SMALL' : 'INTERNAL';
-      roomStmt.run([r.guid, 'IfcSpace', r.name, r.parent, 'COMPILED', ptype, r.cx, r.cy, r.cz, r.sx, r.sy, r.sz]);
+      // §MULTI-RECT: one row per sub-rect, ALL sharing room_guid (= the primary rect's guid) and
+      // the same name/type — N rects, ONE logical room. Sub-rect guids get a letter suffix
+      // (RM_..._5, RM_..._5b, RM_..._5c) so 'RM\_%' patterns keep matching every row.
+      var rcs = r.rects || [{ cx: r.cx, cy: r.cy, sx: r.sx, sy: r.sy }];
+      for (var ri = 0; ri < rcs.length; ri++) {
+        var g = ri === 0 ? r.guid : r.guid + String.fromCharCode(97 + ri);
+        roomStmt.run([g, 'IfcSpace', r.name, r.parent, 'COMPILED', ptype,
+          rcs[ri].cx, rcs[ri].cy, r.cz, rcs[ri].sx, rcs[ri].sy, r.sz, r.guid]);
+        rectRows++;
+      }
     });
     roomStmt.free();
     // rel_contained_in_space: elements whose XY centre falls inside a room (compiled)
@@ -700,13 +815,18 @@
       var candidates = byst[e.st] || [];
       for (var i = 0; i < candidates.length; i++) {
         var r = candidates[i];
-        if (Math.abs(e.ex - r.cx) <= r.sx / 2 && Math.abs(e.ey - r.cy) <= r.sy / 2) {
-          relStmt.run([r.guid, e.g]); rel++; break;
+        // §MULTI-RECT: contained iff inside ANY of the room's rects; the rel row keys the
+        // LOGICAL room guid so downstream still sees one room, not N.
+        var rcs = r.rects || [r];
+        var hit = false;
+        for (var q = 0; q < rcs.length; q++) {
+          if (Math.abs(e.ex - rcs[q].cx) <= rcs[q].sx / 2 && Math.abs(e.ey - rcs[q].cy) <= rcs[q].sy / 2) { hit = true; break; }
         }
+        if (hit) { relStmt.run([r.guid, e.g]); rel++; break; }
       }
     });
     relStmt.free();
-    return { roomsWritten: allrooms.length, relWritten: rel };
+    return { roomsWritten: allrooms.length, rectRowsWritten: rectRows, relWritten: rel };
   }
 
   // Convenience matching compile_rooms.py's CLI main(): compute, optionally persist. `opts.write`
@@ -719,7 +839,7 @@
       suspectTotal: compiled.suspectTotal };
     if (opts.write) {
       var w = writeRooms(db, compiled);
-      result.roomsWritten = w.roomsWritten; result.relWritten = w.relWritten;
+      result.roomsWritten = w.roomsWritten; result.rectRowsWritten = w.rectRowsWritten; result.relWritten = w.relWritten;
     }
     return result;
   }

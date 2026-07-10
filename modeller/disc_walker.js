@@ -223,6 +223,9 @@
     // shipped ARC residents mostly carry NO spatial_structure table at all — probe sqlite_master first
     // (same idiom as placeMeasured's rule_placement probe) instead of throwing out of the whole walk.
     if (!out.length && _rows(bdb, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='spatial_structure'").length) {
+      // §MULTI-RECT (ROOM_INJECTION_HYBRID.md §8, checked 2026-07-11): a compiled room may now be
+      // N rows (sub-rectangles sharing room_guid) — ALL of them are RM_-prefixed, so this same
+      // exclusion covers them; spacesOf never sees N-rows-per-room and needs no grouping.
       out = _rows(bdb, "SELECT guid, COALESCE(NULLIF(object_type,''), name) label, name room_no, " +
         "parent_guid, center_x cx, center_y cy, center_z cz, COALESCE(size_x,0) bx, " +
         "COALESCE(size_y,0) by_, COALESCE(size_z,0) bz FROM spatial_structure WHERE type='IfcSpace' " +

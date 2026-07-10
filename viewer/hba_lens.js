@@ -175,19 +175,30 @@
     if (_storeysBound || !h.L || !h.L.bindStoreys || !A || typeof A.dbQuery !== 'function') return;
     try {
       var rows;
+      // §MULTI-RECT (ROOM_INJECTION_HYBRID.md §8): a compiled room may be N spatial_structure rows
+      // (one per sub-rectangle) sharing room_guid — group EVERYTHING here by the LOGICAL room guid
+      // (room_guid, falling back to guid for real IfcSpace / pre-§8 data) so the lens still sees ONE
+      // room per real space. Older DBs lack the room_guid column → guarded fallback query.
       try {
-        rows = A.dbQuery("SELECT s.guid, p.name, s.predefined_type, s.center_x, s.center_y, s.center_z, s.size_x, s.size_y, s.size_z "
+        rows = A.dbQuery("SELECT s.guid, p.name, s.predefined_type, s.center_x, s.center_y, s.center_z, s.size_x, s.size_y, s.size_z, s.room_guid "
           + "FROM spatial_structure s LEFT JOIN spatial_structure p "
           + "ON s.parent_guid=p.guid AND p.type='IfcBuildingStorey' WHERE s.type='IfcSpace'");
-      } catch (eSp) { rows = []; }   // a building with NO spatial_structure (e.g. a warehouse) → §AISLE-ZONES fallback below
-      var map = {}; (rows || []).forEach(function (r) { if (r[0] && r[1]) map[r[0]] = r[1]; });
+      } catch (eRg) {
+        try {
+          rows = A.dbQuery("SELECT s.guid, p.name, s.predefined_type, s.center_x, s.center_y, s.center_z, s.size_x, s.size_y, s.size_z, NULL "
+            + "FROM spatial_structure s LEFT JOIN spatial_structure p "
+            + "ON s.parent_guid=p.guid AND p.type='IfcBuildingStorey' WHERE s.type='IfcSpace'");
+        } catch (eSp) { rows = []; }   // a building with NO spatial_structure (e.g. a warehouse) → §AISLE-ZONES fallback below
+      }
+      var _logical = function (r) { return r[9] || r[0]; };
+      var map = {}; (rows || []).forEach(function (r) { if (r[0] && r[1]) map[_logical(r)] = r[1]; });
       h.L.bindStoreys(map); _storeysBound = true;
       console.log('§HBA_STOREY bound ' + Object.keys(map).length + ' rooms→storey from model');
       // §CLASS facet — map a REAL IfcSpace predefined_type → our use-class (extracted, non-invent). Only a
       // genuine IfcSpaceTypeEnum use-class counts; INTERNAL/EXTERNAL/COMPILED/NOTDEFINED/USERDEFINED are NOT a
       // use-class → skipped (the class then falls back to the declared lease unit_class). HHS = all INTERNAL.
       var CLS = { RESIDENTIAL: 'residential', OFFICE: 'office', COMMERCIAL: 'commercial', RETAIL: 'commercial', SHOP: 'commercial' };
-      var sc = {}; (rows || []).forEach(function (r) { var pt = (r[2] || '').toUpperCase(); if (CLS[pt]) sc[r[0]] = CLS[pt]; });
+      var sc = {}; (rows || []).forEach(function (r) { var pt = (r[2] || '').toUpperCase(); if (CLS[pt]) sc[_logical(r)] = CLS[pt]; });
       A._hbaSpaceClass = sc;
       if (Object.keys(sc).length) console.log('§HBA_CLASS mapped ' + Object.keys(sc).length + ' rooms→use-class from model predefined_type');
       // §2026-07-05e (user: "make the spaces tint shine thru? at least their outer total perimeter") — a room's
@@ -199,7 +210,15 @@
       var fp = {};
       (rows || []).forEach(function (r) {
         if (r[0] && r[6] != null && r[7] != null && r[8] != null) {
-          fp[r[0]] = { cx: r[3], cy: r[4], cz: r[5], sx: r[6], sy: r[7], sz: r[8] };
+          var lg = _logical(r);
+          var box = { cx: r[3], cy: r[4], cz: r[5], sx: r[6], sy: r[7], sz: r[8] };
+          if (!fp[lg]) {
+            // primary row (guid === room_guid) arrives first in table order; keep its box as the
+            // room's top-level footprint for any single-box consumer, and collect ALL rects.
+            fp[lg] = { cx: box.cx, cy: box.cy, cz: box.cz, sx: box.sx, sy: box.sy, sz: box.sz, rects: [box] };
+          } else {
+            fp[lg].rects.push(box);   // §MULTI-RECT sub-rectangle of the same logical room
+          }
         }
       });
       A._hbaRoomFootprint = fp;
@@ -411,14 +430,17 @@
     (plan.linked || []).forEach(function (guid) {
       var fp = A._hbaRoomFootprint[guid]; if (!fp) return;               // honest no-op — no real footprint extracted
       var tint = plan.tints[guid]; if (!tint) return;
+      // §MULTI-RECT: a room may be N sub-rectangles (fp.rects) — outline each, same tint, ONE room
+      // counted (drawn stays a per-room count, so §HBA log room counts are unchanged).
+      (fp.rects || [fp]).forEach(function (rc, rci) {
       // §FIX 2026-07-06 (user report: boxes render outside the building) — fp.cx/cy/cz/sx/sy/sz are RAW
       // extracted spatial_structure values (world coords, IFC axis convention X=east/Y=north/Z=up). Every OTHER
       // rendered element goes through A.ifc2three (subtracts A.modelOffset, the per-building recentring offset
       // every mesh in this viewer is shifted by — scene.js:370, streaming.js:1640) before becoming a THREE
       // position. This box skipped that entirely, so it rendered at the raw un-recentred IFC coordinate —
       // displaced by the full modelOffset from the actual (recentred) room geometry it was meant to outline.
-      var pos = A.ifc2three(fp.cx, fp.cy, fp.cz);
-      var geo = new THREE.BoxGeometry(fp.sx, fp.sz, fp.sy);               // size swap matches ifc2three's y<->z
+      var pos = A.ifc2three(rc.cx, rc.cy, rc.cz);
+      var geo = new THREE.BoxGeometry(rc.sx, rc.sz, rc.sy);               // size swap matches ifc2three's y<->z
       var edges = new THREE.EdgesGeometry(geo);
       // §FIX 2026-07-06c (user report: outline doesn't "shine through" occluding geometry) — plain depth-tested
       // LineBasicMaterial was occluded by any wall/slab in front of it, same as an ordinary mesh. navigate_find.js's
@@ -429,7 +451,9 @@
       var lines = new THREE.LineSegments(edges, mat);
       lines.renderOrder = 999;
       lines.position.set(pos.x, pos.y, pos.z);
-      group.add(lines); geo.dispose(); drawn++;
+      group.add(lines); geo.dispose();
+      if (rci === 0) drawn++;   // §MULTI-RECT: count rooms, not sub-rect outlines
+      });
     });
     if (drawn) { A.scene.add(group); _outlineGroup = group; }
     return drawn;
