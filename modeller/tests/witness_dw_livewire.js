@@ -44,7 +44,8 @@ function frameCheck() {
     WHERE type='IfcSpace' AND guid NOT LIKE 'RM\\_%' ESCAPE '\\' AND name NOT LIKE '%≈%'`).all();
   db.close();
   const out = sp.filter(s => s.cx + s.sx / 2 < arc.x0 || s.cx - s.sx / 2 > arc.x1 || s.cy + s.sy / 2 < arc.y0 || s.cy - s.sy / 2 > arc.y1);
-  chk('L0 FRAME projected spaces ∩ ARC bbox', sp.length === 21 && out.length === 0,
+  // 21→20 (2026-07-10): R301 Roof void stripped by W-ROOM-HAB (ROOM_INJECTION_HYBRID.md §6 S2/S4)
+  chk('L0 FRAME projected spaces ∩ ARC bbox', sp.length === 20 && out.length === 0,
     `${sp.length - out.length}/${sp.length} intersect` + (out.length ? ' OUTSIDE: ' + out.map(s => s.name).join(',') : ''));
 }
 

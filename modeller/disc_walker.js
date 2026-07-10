@@ -233,11 +233,43 @@
         .forEach(function (r) { storeyName[r.guid] = r.name; });
       out.forEach(function (s) { s.storey = storeyName[s.parent_guid] || 'Unknown'; });
     }
+    var env = _substrateEnv(bdb);
     return out.map(function (s) {
       return { guid: s.guid, label: s.label, storey: s.storey,
         x0: s.cx - s.bx / 2, x1: s.cx + s.bx / 2, y0: s.cy - s.by_ / 2, y1: s.cy + s.by_ / 2,
         z0: s.cz - s.bz / 2, z1: s.cz + s.bz / 2 };
+    }).filter(function (sp) {
+      var v = spaceHabitable(sp, env);
+      if (!v.ok) console.log(TAG + ' §SPACE-NONHAB ' + sp.label + ' (' + sp.guid + ') excluded — ' +
+        v.why + ' — real IfcSpace but not a habitable room; never schedule-placed');
+      return v.ok;
     });
+  }
+
+  // §ROOM-HAB (ROOM_INJECTION_HYBRID.md §6 S1, W-ROOM-HAB): real-vs-NON-HABITABLE-real classifier.
+  // Real-vs-synthetic is already solved above (RM_/≈ exclusion); this filters honestly-extracted
+  // IfcSpace rows that are still not rooms (roof/shaft/plant voids). Exclude-list is verbatim from
+  // the Task 5 spec — grows only by review against real extractions, never guessed. Geometry signal:
+  // a space whose ceiling sits ABOVE the building's entire real-element envelope is not enclosed
+  // (Duplex R301 Roof: z1 8.91 vs envelope 6.67; all 20 genuine rooms ≤ 5.61).
+  var NONHAB_TYPES = ['ROOF', 'SHAFT', 'VOID', 'PLANT', 'PLANT_ROOM', 'EXTERNAL', 'PODIUM',
+    'SILL', 'PARAPET', 'BALCONY'];
+  function _substrateEnv(bdb) {
+    var r = _rows(bdb, "SELECT MIN(center_x-bbox_x/2) x0, MAX(center_x+bbox_x/2) x1, " +
+      "MIN(center_y-bbox_y/2) y0, MAX(center_y+bbox_y/2) y1, MIN(center_z-bbox_z/2) z0, " +
+      "MAX(center_z+bbox_z/2) z1 FROM element_transforms");
+    return (r.length && r[0].z1 != null) ? r[0] : null;
+  }
+  function spaceHabitable(space, env, excludeList) {
+    var list = excludeList || NONHAB_TYPES;
+    var norm = String(space.label || '').toUpperCase().replace(/[\s]+/g, '_')
+      .replace(/[_\s]*\d+$/, '').trim();
+    var toks = norm.split('_');
+    for (var i = 0; i < list.length; i++)
+      if (norm === list[i] || toks.indexOf(list[i]) >= 0) return { ok: false, why: 'label:' + list[i] };
+    if (env && env.z1 != null && space.z1 > env.z1 + 0.25)
+      return { ok: false, why: 'zband:' + space.z1.toFixed(2) + '>' + env.z1.toFixed(2) };
+    return { ok: true };
   }
 
   // LongName → schedule space_type: normalize (upper, spaces→_, strip trailing numbering — the
@@ -2177,6 +2209,7 @@
     route: route, routeChains: routeChains, routePattern: routePattern, gate: gate, repRules: repRules, order: order, clearance: clearance,
     hostWalls: hostWalls, countPer: countPer, occupancy: occupancy, defaultSeed: defaultSeed, spaceAsStorey: spaceAsStorey,
     spacesOf: spacesOf, placeSchedule: placeSchedule,
+    spaceHabitable: spaceHabitable, _substrateEnv: _substrateEnv,
     _shimForDisc: _shimForDisc, _shimForFixture: _shimForFixture, _loadRuleShims: _loadRuleShims,
     _trueMidpoint: _trueMidpoint,
     bendFinder: bendFinder, fittingOrientation: fittingOrientation, bendFittings: bendFittings,
