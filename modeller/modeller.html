@@ -284,6 +284,11 @@ if (window.WholeHistory && WholeHistory.mount) WholeHistory.mount({ page: 'model
 <!-- §I5 per-instance hide (SPEC_INSTANCE_HIDE.md §I5d): Walked-Fixtures Outliner category — one row per
      walked instance (windowed via §V4 OL_CHUNK), eye = hide that exact instanceId. Witness: W-E2E-INSTHIDE. -->
 <script src="dw_instances_outliner.js?v=1" onerror="console.warn('§DWINST LOAD_FAIL dw_instances_outliner.js')"></script>
+<!-- Room Walker (ROOM_WALKER_JS_PORT.md Task 4): JS port of compile_rooms.py's flood-fill/door-rescue/
+     door-partition algorithm, wired as an explicit-trigger "Rooms" Outliner category — NEVER auto-run
+     on open, never recomputes once spatial_structure has data (§2 guardrail). -->
+<script src="room_walker.js?v=1" onerror="console.warn('§ROOMWALK LOAD_FAIL room_walker.js')"></script>
+<script src="room_walker_outliner.js?v=1" onerror="console.warn('§ROOMWALK LOAD_FAIL room_walker_outliner.js')"></script>
 <script src="seed_trunk.js?v=1" onerror="console.warn('§ST LOAD_FAIL seed_trunk.js')"></script>
 <!-- §TEAMS-EMBED — GATED Teams overlay over the live scene (teams/ROADMAP.md §S11). ONE inert guarded script:
      OFF by default (no flag) → init() returns immediately, NO pill/pane/module-fetch = pixel-identical. ON
@@ -3381,6 +3386,7 @@ if (!window.SQL && window.initSqlJs) {
 if (window.BOMTreeOutliner) window.BOMTreeOutliner.register();   // ARC = the lead containment tree
 if (window.STRWalkerOutliner) window.STRWalkerOutliner.register();   // STR Walker result tab + grid-drag re-walk
 if (window.DWInstancesOutliner) window.DWInstancesOutliner.register();   // §I5 Walked Fixtures — per-instance rows/eyes
+if (window.RoomWalkerOutliner) window.RoomWalkerOutliner.register();   // Rooms — explicit "▶ walk" trigger when empty, browse-only once populated
 console.log('§MODELLER outliner ready — ARC (bom-graph) leads + STR Walker tab (Open via the pill rail)');
 
 // ── DISC = WALKER (W-UX-4): a discipline node in the bom-graph is a WALKER entry point. Clicking it dispatches
@@ -3408,6 +3414,38 @@ window.discWalk = function (disc, ctx) {
   // MEP family (MEP/PLB/ELEC/ACMV/FP/…) → DiscWalker: fire-and-forget, same as always (external contract
   // unchanged). _discWalkOne (below) holds the actual steps so window.discWalkAll can compose them too.
   _discWalkOne(disc, ctx, {});
+};
+
+// Room Walker (ROOM_WALKER_JS_PORT.md Task 4): explicit, click-triggered compute-once — NOT routed
+// through window.discWalk/_discWalkOne (Rooms aren't a rules-DB MEP-family discipline; room_walker.js
+// is a standalone flood-fill/door-rescue/door-partition engine over the open building's own wall/door
+// geometry). room_walker_outliner.js's category.onWalk forwards here — same separation-of-concerns
+// convention as bom_tree_outliner.js's onWalk forwarding to window.discWalk (page-level UX glue, the
+// outliner-wiring file stays a pure view). §2 guardrail: only ever called from an explicit user click
+// on the empty-state trigger row — never from Open, never on a category that already has data (the
+// "Rooms" category's tree() only attaches `disc` to that one empty-state row, so this can't be reached
+// by clicking an already-populated Rooms row).
+window.roomWalk = function () {
+  if (!window.__dwBuf) { console.log('§ROOM-WALK — no walk (open a building first)'); return; }
+  if (!window.SQL || !window.RoomWalker) { console.log('§ROOM-WALK — no walk (room_walker.js not ready)'); return; }
+  try {
+    var db = new window.SQL.Database(new Uint8Array(window.__dwBuf));
+    var result = window.RoomWalker.walk(db, { write: true });
+    // Persist into the session's own building buffer — compute once, every subsequent re-open of this
+    // same in-session buffer (Rooms category re-render, a future disc-walk schedule-mode pass, etc.)
+    // reuses it as-is. Same mechanism disc_walker.js's own comment documents for re-opening __dwBuf.
+    window.__dwBuf = db.export();
+    db.close();
+    if (window.Bonsai && window.Bonsai.outliner) {
+      window.Bonsai.outliner._collapsed['tcat|roomwalk'] = false;
+      window.Bonsai.outliner.refresh();
+    }
+    setStat('Room Walker — ' + result.total + ' rooms compiled');
+    console.log('§ROOM-WALK placed=' + result.total + ' door_rescued=' + result.doorRescuedTotal +
+      ' door_partitioned=' + result.doorPartitionTotal);
+  } catch (e) {
+    console.log('§ROOM-WALK failed ' + (e && e.message));
+  }
 };
 // §DISCWALK-ALL refactor: the single-discipline walk steps used to live inline as an anonymous async IIFE
 // inside window.discWalk. Extracted unchanged (same order, same § log lines, same honest-refuse returns) into
