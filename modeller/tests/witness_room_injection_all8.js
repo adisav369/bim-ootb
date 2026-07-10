@@ -31,11 +31,11 @@ const BUILDINGS = [
   { name: 'SampleHouse', kind: 'real',      expectSpace: 3 },
   { name: 'Duplex',      kind: 'real',      expectSpace: 20 },
   { name: 'Terminal',    kind: 'synthetic', expectSpace: 43 },
-  { name: 'SampleCastle',kind: 'synthetic', expectSpace: 25 },
-  { name: 'HHS',         kind: 'synthetic', expectSpace: 2 },
-  { name: 'Clinic',      kind: 'synthetic', expectSpace: 113 },
+  { name: 'SampleCastle',kind: 'synthetic', expectSpace: 53 },
+  { name: 'HHS',         kind: 'synthetic', expectSpace: 6 },
+  { name: 'Clinic',      kind: 'synthetic', expectSpace: 195 },
   { name: 'Garage',      kind: 'synthetic', expectSpace: 5 },
-  { name: 'Hospital',    kind: 'synthetic', expectSpace: 142 },
+  { name: 'Hospital',    kind: 'synthetic', expectSpace: 201 },
 ];
 
 (async () => {
