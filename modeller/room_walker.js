@@ -45,6 +45,18 @@
   // real data (SampleCastle): 28 IfcDoor rows named 'liftdeur' (Dutch: lift/elevator door), width
   // 0.5m — real doors, but 2 of them were rescuing actual elevator-shaft fragments as fake "rooms".
   var NON_ROOM_DOOR_NAMES = ["liftdeur", "lift", "elevator", "aufzug", "fahrstuhl", "hoist"];
+  // §7 ROOM WELL-FORMEDNESS (ROOM_INJECTION_HYBRID.md §7, 2026-07-11 — user doctrine: "a room must
+  // be well formed, fully enclosed, has door"; failures become SUSPECT_* rows for a later review
+  // feature). Both factors are SELF-SCALING to the building's own extracted doors — no fixed metres:
+  // §WALL-VERT: IfcCurtainWall parents carry NO transform (center_x NULL), so curtain walls
+  //   rasterized as NOTHING; real geometry is in IfcMember (mullions) + IfcPlate (glazing) children.
+  //   Include a member/plate iff VERTICAL: bbox_z >= VERT_FACTOR × median real door height (Terminal's
+  //   33k flat "Metal Deck" plates and Clinic's stair-part members stay excluded). No doors → skip.
+  var VERT_FACTOR = 0.5;
+  var CW_CHILD_CLASSES = ["IfcMember", "IfcPlate"];
+  // §ROOM-FORM: openM = unsealed perimeter metres; more than OPEN_PERIM_FACTOR × median door width
+  //   of unsealed edge is not "fully enclosed" → SUSPECT_OPEN; no adjacent door → SUSPECT_NO_DOOR.
+  var OPEN_PERIM_FACTOR = 2.0;
   // §DOOR-PARTITION: on some real buildings (HHS confirmed) wall-enclosure flood-fill structurally
   // can't find rooms — most of the floor floods as one exterior-reachable blob because the walls that
   // would divide individual rooms simply aren't in this extraction. Gate: compare what flood-fill
@@ -71,14 +83,73 @@
     return vals.map(function (v) { var o = {}; cols.forEach(function (c, i) { o[c] = v[i]; }); return o; });
   }
 
-  function storeyWalls(db) {
+  function _median(vals) {
+    var s = vals.slice().sort(function (a, b) { return a - b; });
+    return s.length ? s[Math.floor(s.length / 2)] : 0.0;
+  }
+
+  // Building-level medians of real door width/height — the self-scaling anchors for
+  // §WALL-VERT / §ROOM-FORM. Width = max(bbox_x, bbox_y) (leaf+frame plan span).
+  function doorStats(db) {
+    var rows = _rows(db, "SELECT COALESCE(t.bbox_x,0) bx, COALESCE(t.bbox_y,0) by2, COALESCE(t.bbox_z,0) bz " +
+      "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
+      "WHERE m.ifc_class LIKE 'IfcDoor%' AND t.center_x IS NOT NULL");
+    var ws = [], hs = [];
+    rows.forEach(function (r) {
+      var w = Math.max(r.bx, r.by2);
+      if (w > 0) ws.push(w);
+      if (r.bz > 0) hs.push(r.bz);
+    });
+    return { w: _median(ws), h: _median(hs) };
+  }
+
+  // §STOREY-Z: per-storey mean center_z of EXPLICITLY-assigned real walls — the anchor used to
+  // reassign 'Unknown'-storey wall-like elements + doors to their actual floor (HHS: all 716
+  // vertical curtain children carry storey 'Unknown'; their z clusters match Level 1/2/3 exactly).
+  function storeyZAnchors(db) {
+    var rows = _rows(db, "SELECT m.storey st, t.center_z cz FROM elements_meta m " +
+      "JOIN element_transforms t ON t.guid=m.guid " +
+      "WHERE m.ifc_class LIKE 'IfcWall%' AND t.center_x IS NOT NULL " +
+      "AND m.storey IS NOT NULL AND m.storey <> 'Unknown'");
+    var acc = {};
+    rows.forEach(function (r) { (acc[r.st] = acc[r.st] || []).push(r.cz); });
+    var anchors = {};
+    Object.keys(acc).forEach(function (st) {
+      anchors[st] = acc[st].reduce(function (s, v) { return s + v; }, 0) / acc[st].length;
+    });
+    return anchors;
+  }
+
+  function _assignByZ(st, cz, anchors, anchorNames) {
+    if (st && st !== 'Unknown') return st;
+    if (!anchorNames.length) return 'Unknown';
+    var best = null, bd = Infinity;
+    for (var i = 0; i < anchorNames.length; i++) { // sorted order = deterministic tie-break
+      var d = Math.abs(cz - anchors[anchorNames[i]]);
+      if (d < bd) { bd = d; best = anchorNames[i]; }
+    }
+    return best;
+  }
+
+  function storeyWalls(db, vertMin, anchors) {
+    vertMin = vertMin || 0.0;
     var cond = WALL_LIKE.map(function (p) { return "m.ifc_class LIKE '" + p + "'"; }).join(' OR ');
     var rows = _rows(db, "SELECT m.storey, t.center_x,t.center_y,t.center_z, t.bbox_x,t.bbox_y,t.bbox_z " +
       "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
       "WHERE (" + cond + ") AND t.center_x IS NOT NULL");
+    // §WALL-VERT: curtain-wall children (IfcMember/IfcPlate) that stand wall-height — the enclosure
+    // the bare WALL_LIKE query misses because IfcCurtainWall parents have no transform of their own.
+    if (vertMin > 0) {
+      var inList = CW_CHILD_CLASSES.map(function (c) { return "'" + c + "'"; }).join(',');
+      rows = rows.concat(_rows(db, "SELECT m.storey, t.center_x,t.center_y,t.center_z, t.bbox_x,t.bbox_y,t.bbox_z " +
+        "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
+        "WHERE m.ifc_class IN (" + inList + ") AND t.center_x IS NOT NULL AND t.bbox_z >= " + vertMin));
+    }
+    anchors = anchors || {};
+    var anchorNames = Object.keys(anchors).sort();
     var by = {};
     rows.forEach(function (r) {
-      var st = r.storey || 'Unknown';
+      var st = _assignByZ(r.storey || 'Unknown', r.center_z, anchors, anchorNames); // §STOREY-Z
       (by[st] = by[st] || []).push([r.center_x, r.center_y, r.center_z, r.bbox_x, r.bbox_y, r.bbox_z]);
     });
     return by;
@@ -100,15 +171,18 @@
 
   // Per-storey door (cx,cy,bx,by) — the §DOOR-RESCUE clue for genuine small rooms. Each door's OWN
   // real footprint is carried through so adjacency self-scales to that door, not a guessed metre.
-  function storeyDoors(db) {
-    var rows = _rows(db, "SELECT m.storey, m.element_name en, t.center_x,t.center_y, " +
+  // §STOREY-Z applies here too: an 'Unknown'-storey door is reassigned to its z-nearest real floor.
+  function storeyDoors(db, anchors) {
+    var rows = _rows(db, "SELECT m.storey, m.element_name en, t.center_x,t.center_y, t.center_z, " +
       "COALESCE(t.bbox_x,0) bbox_x, COALESCE(t.bbox_y,0) bbox_y " +
       "FROM elements_meta m JOIN element_transforms t ON t.guid=m.guid " +
       "WHERE m.ifc_class LIKE 'IfcDoor%' AND t.center_x IS NOT NULL");
+    anchors = anchors || {};
+    var anchorNames = Object.keys(anchors).sort();
     var by = {};
     rows.forEach(function (r) {
       if (!_isRoomDoor(r.en)) return; // §DOOR-NOT-ROOM: lift/elevator doors aren't room evidence
-      var st = r.storey || 'Unknown';
+      var st = _assignByZ(r.storey || 'Unknown', r.center_z !== null && r.center_z !== undefined ? r.center_z : 0.0, anchors, anchorNames);
       (by[st] = by[st] || []).push([r.center_x, r.center_y, r.bbox_x, r.bbox_y]);
     });
     return by;
@@ -218,18 +292,126 @@
     return enclosed;
   }
 
-  function floodRooms(walls, stairs, doors) {
-    stairs = stairs || []; doors = doors || [];
+  // §ROOM-FORM: metres of the region's boundary NOT backed by a raw wall. Each boundary contact
+  // (cell face, RES metres each) marches outward through the dilation band (<= sealSteps+1 cells);
+  // 3-wide probe (straight + both perpendicular neighbors) so stair-stepped curved/diagonal walls
+  // read as wall, not open. A contact that exits to free space without meeting raw wall is open.
+  function _openPerimeterM(cells, inSet, raw, dil, nx, ny, sealSteps) {
+    var openC = 0;
+    var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var ci = 0; ci < cells.length; ci++) {
+      var k = cells[ci];
+      var i = Math.floor(k / ny), j = k % ny;
+      for (var d = 0; d < 4; d++) {
+        var di = dirs[d][0], dj = dirs[d][1];
+        var a = i + di, b = j + dj;
+        if (a < 0 || a >= nx || b < 0 || b >= ny) { openC++; continue; }
+        if (inSet[a * ny + b]) continue;
+        var pi = dj, pj = di;
+        var hitWall = false;
+        for (var s = 0; s <= sealSteps; s++) {
+          var aa = i + di * (1 + s), bb = j + dj * (1 + s);
+          if (aa < 0 || aa >= nx || bb < 0 || bb >= ny) break;
+          var kk = aa * ny + bb;
+          var hit = raw[kk];
+          if (!hit) {
+            var la = aa + pi, lb = bb + pj;
+            if (la >= 0 && la < nx && lb >= 0 && lb < ny && raw[la * ny + lb]) hit = 1;
+          }
+          if (!hit) {
+            var ra = aa - pi, rb = bb - pj;
+            if (ra >= 0 && ra < nx && rb >= 0 && rb < ny && raw[ra * ny + rb]) hit = 1;
+          }
+          if (hit) { hitWall = true; break; }
+          if (!dil[kk]) break; // re-entered free space without meeting raw wall
+        }
+        if (!hitWall) openC++;
+      }
+    }
+    return openC * RES;
+  }
+
+  // §RECT-HONESTY: largest axis-aligned rectangle fully inside the claimed cells (maximal-rectangle
+  // histogram scan; deterministic scan order + strict '>' so ties resolve identically in both ports).
+  function _inscribedRect(inSet, ny, mni, mxi, mnj, mxj) {
+    var w = mxi - mni + 1, h = mxj - mnj + 1;
+    var hist = new Array(h);
+    for (var z = 0; z < h; z++) hist[z] = 0;
+    var bestArea = 0, bi0 = mni, bi1 = mni, bj0 = mnj, bj1 = mnj;
+    for (var i = 0; i < w; i++) {
+      for (var j = 0; j < h; j++) {
+        hist[j] = inSet[(mni + i) * ny + (mnj + j)] ? hist[j] + 1 : 0;
+      }
+      var stk = [];
+      for (var j2 = 0; j2 <= h; j2++) {
+        var cur = j2 < h ? hist[j2] : 0;
+        while (stk.length && hist[stk[stk.length - 1]] >= cur) {
+          var top = stk.pop();
+          var height = hist[top];
+          var left = stk.length ? stk[stk.length - 1] + 1 : 0;
+          var area = height * (j2 - left);
+          if (area > bestArea) {
+            bestArea = area;
+            bi0 = mni + i - height + 1; bi1 = mni + i;
+            bj0 = mnj + left; bj1 = mnj + j2 - 1;
+          }
+        }
+        stk.push(j2);
+      }
+    }
+    return [bi0, bi1, bj0, bj1];
+  }
+
+  // §RECT-HONESTY: grow the inscribed rect back to its real walls — each side extends while the
+  // next full line is raw-free, max `steps` cells (the dilation erosion bound). x sides first (using
+  // the original j span), then y sides (using the expanded i span) — fixed order for parity.
+  function _expandRect(raw, nx, ny, i0, i1, j0, j1, steps) {
+    var s, j, i, ok;
+    for (s = 0; s < steps; s++) {
+      ok = i0 > 0;
+      if (ok) for (j = j0; j <= j1; j++) if (raw[(i0 - 1) * ny + j] !== 0) { ok = false; break; }
+      if (ok) i0--; else break;
+    }
+    for (s = 0; s < steps; s++) {
+      ok = i1 < nx - 1;
+      if (ok) for (j = j0; j <= j1; j++) if (raw[(i1 + 1) * ny + j] !== 0) { ok = false; break; }
+      if (ok) i1++; else break;
+    }
+    for (s = 0; s < steps; s++) {
+      ok = j0 > 0;
+      if (ok) for (i = i0; i <= i1; i++) if (raw[i * ny + (j0 - 1)] !== 0) { ok = false; break; }
+      if (ok) j0--; else break;
+    }
+    for (s = 0; s < steps; s++) {
+      ok = j1 < ny - 1;
+      if (ok) for (i = i0; i <= i1; i++) if (raw[i * ny + (j1 + 1)] !== 0) { ok = false; break; }
+      if (ok) j1++; else break;
+    }
+    return [i0, i1, j0, j1];
+  }
+
+  // §ROOM-FORM: user doctrine 'a room must be well formed, fully enclosed, has door'.
+  // Returns null (well-formed) / 'NO_DOOR' / 'OPEN'. doorWMed <= 0 (no real doors in the building)
+  // → openM test is skipped (nothing to derive the limit from; such pockets are SUSPECT_NO_DOOR).
+  function _classify(hasDoor, openM, doorWMed) {
+    if (!hasDoor) return 'NO_DOOR';
+    if (doorWMed > 0 && openM > OPEN_PERIM_FACTOR * doorWMed) return 'OPEN';
+    return null;
+  }
+
+  function floodRooms(walls, stairs, doors, doorWMed) {
+    stairs = stairs || []; doors = doors || []; doorWMed = doorWMed || 0.0;
     var ext = _gridExtent(walls);
     var nx = ext.nx, ny = ext.ny, xs0 = ext.xs0, ys0 = ext.ys0;
-    var blocked = _rasterizeWalls(walls, ext);
-    if (SEAL > 0) blocked = _dilate(blocked, nx, ny, SEAL);
+    var raw = _rasterizeWalls(walls, ext);
+    var dil = SEAL > 0 ? _dilate(raw, nx, ny, SEAL) : raw;
     var free = new Uint8Array(nx * ny);
-    for (var m = 0; m < nx * ny; m++) free[m] = blocked[m] ? 0 : 1;
+    for (var m = 0; m < nx * ny; m++) free[m] = dil[m] ? 0 : 1;
     var enclosed = _floodExterior(free, nx, ny);
 
     var rooms = [];
     var seen = new Uint8Array(nx * ny);
+    var inSet = new Uint8Array(nx * ny);
     var cellArea = RES * RES;
     var planArea = nx * ny * cellArea;
     var cz = walls.reduce(function (s, w) { return s + w[2]; }, 0) / walls.length;
@@ -239,12 +421,12 @@
       for (var sj = 0; sj < ny; sj++) {
         var sk = si * ny + sj;
         if (!enclosed[sk] || seen[sk]) continue;
-        var comp = 0, stack = [sk]; seen[sk] = 1;
+        var comp = [], stack = [sk]; seen[sk] = 1;
         var mni = si, mxi = si, mnj = sj, mxj = sj;
         while (stack.length) {
           var k = stack.pop();
           var i = Math.floor(k / ny), j = k % ny;
-          comp++;
+          comp.push(k);
           if (i < mni) mni = i; if (i > mxi) mxi = i;
           if (j < mnj) mnj = j; if (j > mxj) mxj = j;
           [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) {
@@ -255,7 +437,7 @@
             }
           });
         }
-        var area = comp * cellArea;
+        var area = comp.length * cellArea;
         if (area > MAX_AREA_ABS || area > planArea * MAX_AREA_FRAC) continue;
         var wx0 = xs0 + mni * RES, wx1 = xs0 + (mxi + 1) * RES;
         var wy0 = ys0 + mnj * RES, wy1 = ys0 + (mxj + 1) * RES;
@@ -263,32 +445,44 @@
         // it is big enough to obviously be one on its own (area >= MIN_AREA, unchanged) OR it has a
         // real door AND isn't a bare rasterization sliver (NOISE_FLOOR_DIM).
         var doorRescued = false;
+        var hasDoor = doorAdjacent(wx0, wy0, wx1, wy1, doors);
         if (area < MIN_AREA) {
           var dimsOk = (wx1 - wx0) >= NOISE_FLOOR_DIM && (wy1 - wy0) >= NOISE_FLOOR_DIM;
-          if (!(dimsOk && doorAdjacent(wx0, wy0, wx1, wy1, doors))) continue;
+          if (!(dimsOk && hasDoor)) continue;
           doorRescued = true;
         }
         // §STAIR-EXCLUDE: a stair/ramp footprint covering this pocket -> it's a circulation shaft,
         // not a room. Drop it.
         var sf = stairOverlapFrac(wx0, wy0, wx1, wy1, stairs);
         if (sf >= STAIR_OVERLAP_REJECT) continue;
+        // §ROOM-FORM + §RECT-HONESTY (ROOM_INJECTION_HYBRID.md §7)
+        var c2;
+        for (c2 = 0; c2 < comp.length; c2++) inSet[comp[c2]] = 1;
+        var openM = _openPerimeterM(comp, inSet, raw, dil, nx, ny, SEAL);
+        var ir = _inscribedRect(inSet, ny, mni, mxi, mnj, mxj);
+        for (c2 = 0; c2 < comp.length; c2++) inSet[comp[c2]] = 0;
+        ir = _expandRect(raw, nx, ny, ir[0], ir[1], ir[2], ir[3], SEAL);
+        var rx0 = xs0 + ir[0] * RES, rx1 = xs0 + (ir[1] + 1) * RES;
+        var ry0 = ys0 + ir[2] * RES, ry1 = ys0 + (ir[3] + 1) * RES;
         rooms.push({
-          cx: (wx0 + wx1) / 2, cy: (wy0 + wy1) / 2, cz: cz,
-          sx: wx1 - wx0, sy: wy1 - wy0, sz: Math.max(bz, 2.0), area: area,
-          door_rescued: doorRescued
+          cx: (rx0 + rx1) / 2, cy: (ry0 + ry1) / 2, cz: cz,
+          sx: rx1 - rx0, sy: ry1 - ry0, sz: Math.max(bz, 2.0), area: area,
+          door_rescued: doorRescued, open_m: openM,
+          suspect: _classify(hasDoor, openM, doorWMed)
         });
       }
     }
     return rooms;
   }
 
-  function partitionByDoors(walls, doors, stairs) {
+  function partitionByDoors(walls, doors, stairs, doorWMed) {
     if (!doors.length) return [];
+    doorWMed = doorWMed || 0.0;
     var ext = _gridExtent(walls);
     var nx = ext.nx, ny = ext.ny, xs0 = ext.xs0, ys0 = ext.ys0;
-    var blocked = _rasterizeWalls(walls, ext);
+    var raw = _rasterizeWalls(walls, ext);
     var free = new Uint8Array(nx * ny);
-    for (var m = 0; m < nx * ny; m++) free[m] = blocked[m] ? 0 : 1;
+    for (var m = 0; m < nx * ny; m++) free[m] = raw[m] ? 0 : 1;
     var cz = walls.reduce(function (s, w) { return s + w[2]; }, 0) / walls.length;
     var bz = walls.reduce(function (s, w) { return s + w[5]; }, 0) / walls.length;
     var ix = function (x) { return Math.min(nx - 1, Math.max(0, Math.floor((x - xs0) / RES))); };
@@ -334,6 +528,7 @@
       if (o === -1) continue;
       (byOwner[o] = byOwner[o] || []).push(k);
     }
+    var inSet = new Uint8Array(nx * ny);
     var rooms = [];
     doors.forEach(function (d, di) {
       var cells = byOwner[di];
@@ -350,10 +545,21 @@
       if ((wx1 - wx0) < NOISE_FLOOR_DIM || (wy1 - wy0) < NOISE_FLOOR_DIM) return;
       if (area > MAX_AREA_ABS || area > planArea * MAX_AREA_FRAC) return;
       if (stairOverlapFrac(wx0, wy0, wx1, wy1, stairs) >= STAIR_OVERLAP_REJECT) return;
+      // §ROOM-FORM + §RECT-HONESTY (ROOM_INJECTION_HYBRID.md §7). No dilation on this path →
+      // sealSteps=0 for the openM march, no outward expansion (claims already touch raw walls).
+      var c2;
+      for (c2 = 0; c2 < cells.length; c2++) inSet[cells[c2]] = 1;
+      var openM = _openPerimeterM(cells, inSet, raw, raw, nx, ny, 0);
+      var ir = _inscribedRect(inSet, ny, mni, mxi, mnj, mxj);
+      for (c2 = 0; c2 < cells.length; c2++) inSet[cells[c2]] = 0;
+      var rx0 = xs0 + ir[0] * RES, rx1 = xs0 + (ir[1] + 1) * RES;
+      var ry0 = ys0 + ir[2] * RES, ry1 = ys0 + (ir[3] + 1) * RES;
+      var hasDoor = doorAdjacent(wx0, wy0, wx1, wy1, doors);
       rooms.push({
-        cx: (wx0 + wx1) / 2, cy: (wy0 + wy1) / 2, cz: cz,
-        sx: wx1 - wx0, sy: wy1 - wy0, sz: Math.max(bz, 2.0), area: area,
-        door_rescued: false, door_partitioned: true
+        cx: (rx0 + rx1) / 2, cy: (ry0 + ry1) / 2, cz: cz,
+        sx: rx1 - rx0, sy: ry1 - ry0, sz: Math.max(bz, 2.0), area: area,
+        door_rescued: false, door_partitioned: true, open_m: openM,
+        suspect: _classify(hasDoor, openM, doorWMed)
       });
     });
     return rooms;
@@ -374,9 +580,15 @@
         .forEach(function (r) { stGuid[r.name] = r.guid; });
     }
 
-    var wallsBy = storeyWalls(db);
+    // §7 self-scaling anchors: this building's own median door width/height (§ROOM-FORM/§WALL-VERT)
+    // + per-storey wall-z anchors (§STOREY-Z).
+    var ds = doorStats(db);
+    var doorWMed = ds.w;
+    var vertMin = ds.h > 0 ? VERT_FACTOR * ds.h : 0.0;
+    var anchors = storeyZAnchors(db);
+    var wallsBy = storeyWalls(db, vertMin, anchors);
     var stairsBy = storeyStairs(db);
-    var doorsBy = storeyDoors(db);
+    var doorsBy = storeyDoors(db, anchors);
     // §STAIR-EXCLUDE: stair storey is often 'Unknown'/unassigned in the extract, and a stair is a
     // CONTINUOUS vertical shaft anyway — test every room pocket against the UNION of all stair
     // footprints by XY (not per-storey).
@@ -391,12 +603,12 @@
         return;
       }
       var doors = doorsBy[st] || [];
-      var roomsFlood = floodRooms(ws, allStairs, doors);
+      var roomsFlood = floodRooms(ws, allStairs, doors, doorWMed);
       // §DOOR-PARTITION gate: flood-fill found far fewer rooms than this storey has real doors — it
       // has structurally failed here, fall back to nearest-door partitioning.
       var rooms, method;
       if (doors.length && roomsFlood.length < DOOR_SHORTFALL_RATIO * doors.length) {
-        rooms = partitionByDoors(ws, doors, allStairs);
+        rooms = partitionByDoors(ws, doors, allStairs, doorWMed);
         method = 'door-partition (flood-fill only found ' + roomsFlood.length + '/' + doors.length + ' doors)';
       } else {
         rooms = roomsFlood;
@@ -404,16 +616,20 @@
       }
       var rescued = rooms.filter(function (r) { return r.door_rescued; }).length;
       var partitioned = rooms.filter(function (r) { return r.door_partitioned; }).length;
+      var suspects = rooms.filter(function (r) { return r.suspect; }).length;
       stZ[st] = ws.reduce(function (s, w) { return s + w[2]; }, 0) / ws.length; // storey z = mean wall centre-z
       report.push({
         storey: st, walls: ws.length, doors: doors.length, method: method, roomCount: rooms.length,
-        doorRescued: rescued, doorPartitioned: partitioned, areas: rooms.map(function (r) { return Math.round(r.area); })
+        doorRescued: rescued, doorPartitioned: partitioned, suspect: suspects,
+        areas: rooms.map(function (r) { return Math.round(r.area); })
       });
       rooms.forEach(function (r, k) {
         r.storey = st; r.guid = ('RM_' + st + '_' + (k + 1)).replace(/ /g, '_');
-        // §APPROX: '≈' marks the room as compiled/approximate in the lens label. parent_guid -> a
-        // compiled storey row (created on write) so the Room lens groups per floor.
-        r.name = '≈ ' + st + ' R' + (k + 1);
+        // §APPROX: '≈' marks the room as compiled/approximate in the lens label; '⚠' marks a
+        // §ROOM-FORM SUSPECT (kept visible for the future review feature, never silently dropped).
+        // parent_guid -> a compiled storey row (created on write) so the Room lens groups per floor.
+        var mark = r.suspect ? '⚠' : '≈';
+        r.name = mark + ' ' + st + ' R' + (k + 1);
         r.parent = stGuid[st] || ('STC_' + st).replace(/ /g, '_');
         allrooms.push(r);
       });
@@ -421,7 +637,8 @@
     var total = allrooms.length;
     var doorRescuedTotal = allrooms.filter(function (r) { return r.door_rescued; }).length;
     var doorPartitionTotal = allrooms.filter(function (r) { return r.door_partitioned; }).length;
-    return { report: report, rooms: allrooms, stZ: stZ, total: total, doorRescuedTotal: doorRescuedTotal, doorPartitionTotal: doorPartitionTotal };
+    var suspectTotal = allrooms.filter(function (r) { return r.suspect; }).length;
+    return { report: report, rooms: allrooms, stZ: stZ, total: total, doorRescuedTotal: doorRescuedTotal, doorPartitionTotal: doorPartitionTotal, suspectTotal: suspectTotal };
   }
 
   // Persist a compileRooms() result into spatial_structure + rel_contained_in_space (the --write
@@ -456,7 +673,10 @@
     allrooms.forEach(function (r) {
       // predefined_type distinguishes which compile technique found each room, for traceability —
       // object_type stays 'COMPILED' either way (the tag spacesOf()'s exclusion filter keys on).
-      var ptype = r.door_partitioned ? 'INTERNAL_DOORPART' : r.door_rescued ? 'INTERNAL_SMALL' : 'INTERNAL';
+      // §ROOM-FORM: SUSPECT_* overrides — the room failed "well formed, fully enclosed, has door"
+      // and is carried as a review candidate, not as a trusted room.
+      var ptype = r.suspect ? ('SUSPECT_' + r.suspect) :
+        r.door_partitioned ? 'INTERNAL_DOORPART' : r.door_rescued ? 'INTERNAL_SMALL' : 'INTERNAL';
       roomStmt.run([r.guid, 'IfcSpace', r.name, r.parent, 'COMPILED', ptype, r.cx, r.cy, r.cz, r.sx, r.sy, r.sz]);
     });
     roomStmt.free();
@@ -468,7 +688,12 @@
     var els = _rows(db, "SELECT m.guid g, m.storey st, t.center_x ex, t.center_y ey FROM elements_meta m " +
       "JOIN element_transforms t ON t.guid=m.guid WHERE t.center_x IS NOT NULL");
     var byst = {};
-    allrooms.forEach(function (r) { (byst[r.storey] = byst[r.storey] || []).push(r); });
+    // §ROOM-FORM: SUSPECT rooms get no element containment — an unreviewed corridor/void must not
+    // capture elements away from real rooms.
+    allrooms.forEach(function (r) {
+      if (r.suspect) return;
+      (byst[r.storey] = byst[r.storey] || []).push(r);
+    });
     var relStmt = db.prepare('INSERT INTO rel_contained_in_space (space_guid, element_guid) VALUES (?,?)');
     var rel = 0;
     els.forEach(function (e) {
@@ -490,7 +715,8 @@
     opts = opts || {};
     var compiled = compileRooms(db);
     var result = { report: compiled.report, total: compiled.total,
-      doorRescuedTotal: compiled.doorRescuedTotal, doorPartitionTotal: compiled.doorPartitionTotal };
+      doorRescuedTotal: compiled.doorRescuedTotal, doorPartitionTotal: compiled.doorPartitionTotal,
+      suspectTotal: compiled.suspectTotal };
     if (opts.write) {
       var w = writeRooms(db, compiled);
       result.roomsWritten = w.roomsWritten; result.relWritten = w.relWritten;
@@ -500,10 +726,12 @@
 
   var API = {
     storeyWalls: storeyWalls, storeyStairs: storeyStairs, storeyDoors: storeyDoors,
+    doorStats: doorStats, storeyZAnchors: storeyZAnchors,
     doorAdjacent: doorAdjacent, stairOverlapFrac: stairOverlapFrac,
     floodRooms: floodRooms, partitionByDoors: partitionByDoors,
     compileRooms: compileRooms, writeRooms: writeRooms, walk: walk,
-    RES: RES, MIN_AREA: MIN_AREA, DOOR_SHORTFALL_RATIO: DOOR_SHORTFALL_RATIO
+    RES: RES, MIN_AREA: MIN_AREA, DOOR_SHORTFALL_RATIO: DOOR_SHORTFALL_RATIO,
+    VERT_FACTOR: VERT_FACTOR, OPEN_PERIM_FACTOR: OPEN_PERIM_FACTOR
   };
   ROOT.RoomWalker = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
