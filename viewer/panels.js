@@ -261,11 +261,17 @@ function setupPanels(A) {
       if (cand.left < 8) break;   // ran off the left edge of the viewport
       if (!others.some(function(o) { return overlaps(cand, o); })) {
         el.style.right = right + 'px'; el.style.left = 'auto'; el.style.top = top + 'px';
+        // §FIND-TOO-HIGH: a panel whose own CSS centers it via transform (#find-panel's
+        // translateY(-50%)) keeps that transform after top/right are overridden — visual top
+        // becomes top − height/2, shoving a tall panel above the screen edge. Placement owns
+        // the position now; clear the transform.
+        el.style.transform = 'none';
         console.log('§PANEL_PLACE id=' + el.id + ' col=' + col + ' right=' + right + ' others=' + others.length);
         return;
       }
     }
     el.style.right = right0 + 'px'; el.style.top = top + 'px';
+    el.style.transform = 'none';  // §FIND-TOO-HIGH (same as above, fallback slot)
     console.log('§PANEL_PLACE_FALLBACK id=' + el.id + ' (no free column in range, others=' + others.length + ')');
   };
 

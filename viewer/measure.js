@@ -62,6 +62,11 @@ function setupMeasure(A) {
       el.style.top = (sy + e.clientY - oy) + 'px';
       el.style.right = 'auto';
       el.style.bottom = 'auto';
+      // §FIND-DRAG-JUMP: sx/sy came from getBoundingClientRect (transform included). A panel
+      // centered via transform (e.g. #find-panel's translateY(-50%)) must have that transform
+      // cleared once left/top take over, or it renders half its height ABOVE the drag position
+      // (user-visible: Find panel flung past the top screen edge on first drag).
+      el.style.transform = 'none';
     });
     // Capture phase so a child's stopPropagation (e.g. a section-header collapse handler)
     // can't swallow the release — otherwise pending stays true and the panel sticks to the cursor.
