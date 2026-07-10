@@ -32,8 +32,8 @@ const BUILDINGS = [
   { name: 'Duplex',      kind: 'real',      expectSpace: 20 },
   { name: 'Terminal',    kind: 'synthetic', expectSpace: 43 },
   { name: 'SampleCastle',kind: 'synthetic', expectSpace: 51 },
-  { name: 'HHS',         kind: 'synthetic', expectSpace: 6 },
-  { name: 'Clinic',      kind: 'synthetic', expectSpace: 195 },
+  { name: 'HHS',         kind: 'synthetic', expectSpace: 105 },
+  { name: 'Clinic',      kind: 'synthetic', expectSpace: 197 },
   { name: 'Garage',      kind: 'synthetic', expectSpace: 5 },
   { name: 'Hospital',    kind: 'synthetic', expectSpace: 201 },
 ];
