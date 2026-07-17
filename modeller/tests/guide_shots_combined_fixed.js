@@ -41,7 +41,21 @@ function serve() {
 async function boot(browser, port, key, logs, errs) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 });
   const pg = await ctx.newPage();
-  pg.on('console', m => { logs.push(m.text()); if (m.type() === 'error') errs.push('CONSOLE-ERROR ' + m.text().slice(0, 200)); });
+  // §PATCH-SELFHEAL (str_walker_outliner.js) probes modeller/patches/<db>.sql on every open; a 404 there
+  // is the expected common case (most buildings ship no patch) and Chromium logs it as a console 'error'
+  // regardless of the app's own best-effort .catch() — same benign noise this codebase's other witnesses
+  // already exclude (see witness_modeller_disc_walk.js's LOAD_FAIL/PAGEERROR filter, not raw type()==='error').
+  // Chromium's console message text drops the URL, so correlate against the actual network response
+  // instead of guessing from message text — only suppress a console error 1:1 per confirmed patch-probe
+  // 404, so an unrelated failure (missing mesh, broken script) still surfaces.
+  const benign404s = [];
+  pg.on('response', r => { if (r.status() === 404 && /\/patches\/.*\.sql$/.test(r.url())) benign404s.push(r.url()); });
+  pg.on('console', m => {
+    logs.push(m.text());
+    if (m.type() !== 'error') return;
+    if (/Failed to load resource.*404/.test(m.text()) && benign404s.length) { benign404s.pop(); return; }
+    errs.push('CONSOLE-ERROR ' + m.text().slice(0, 200));
+  });
   pg.on('pageerror', e => errs.push('PAGEERROR ' + String(e).slice(0, 200)));
   await pg.goto(`http://localhost:${port}/modeller/modeller.html`, { waitUntil: 'load', timeout: 60000 });
   await pg.waitForFunction('window.__sceneReady === true && !!window.SQL && !!window.Bonsai', null, { timeout: 30000 });
