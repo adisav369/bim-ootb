@@ -669,7 +669,10 @@ async function setupScene(A) {
       if (_ociUrl) {
         console.warn(`[S203] §DB_404_OCI_RETRY status=${resp.status} orig=${url} → ${_ociUrl}`);
         var _ociResp = await fetch(_ociUrl);
-        if (_ociResp.ok) { resp = _ociResp; console.log(`[S203] §DB_404_OCI_OK url=${_ociUrl.split('/').pop()}`); }
+        // §S2 (GEOMETRY_TRUTH_CHAIN.md): remember that THIS load was healed onto a different copy —
+        // §DB_IDENTITY reports it as healed=YES(...). The heal silently changes WHICH db you get;
+        // until now only the rewrite was logged, never what came back.
+        if (_ociResp.ok) { resp = _ociResp; (A._ociHealed = A._ociHealed || []).push(_ociUrl.split('/').pop()); console.log(`[S203] §DB_404_OCI_OK url=${_ociUrl.split('/').pop()}`); }
         else console.warn(`[S203] §DB_404_OCI_FAIL url=${_ociUrl} status=${_ociResp.status}`);
       }
     }

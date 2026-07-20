@@ -22,6 +22,67 @@ function setupStreaming(A) {
   // drawBuildingBoxes() retired — replaced by per-element _drawBboxPlaceholders()
   A.drawBuildingBoxes = function() {};
 
+  // ── GEOMETRY_TRUTH_CHAIN.md §S2 (Viewer half) — `§DB_IDENTITY` ────────────────────────────────
+  // ONE line per building open declaring WHICH copy actually resolved. Log-only, never blocks.
+  //
+  // WHY THE VIEWER NEEDS THIS MORE THAN THE MODELLER: the viewer's building DBs live on OCI, not in
+  // the page tree, and `db_resolve.js` SELF-HEALS a 404 by rewriting `buildings/<file>` to the OCI
+  // base and retrying (§DB_404_OCI_RETRY, scene.js). That heal silently changes WHICH COPY loads.
+  // It logs that a rewrite happened — it has never declared what came back. A heal onto a divergent
+  // or emptier OCI copy is therefore invisible: exactly the HHS "0 stairs published, then 20"
+  // casualty in this spec's backstory.
+  //
+  // It also names the viewer's own silent-box state: §SPLIT_GEO_FALLBACK_META sets libDb = meta db
+  // and renders bboxes only. That path logs a reason but no COUNTS, so "geometry unavailable" and
+  // "geometry fine" produce equally calm logs. `geo=0/<n>` states it out loud.
+  // Keyed on the resolved db url + building rather than a one-shot boolean: the first branch to
+  // resolve wins for THIS load, but switching building (city.js, deep-link) reports again.
+  A._dbIdentityKey = null;
+  A._dbIdentity = function (tag) {
+    var _key = (A.DB_URL || '?') + '|' + (A.activeBuilding || '?');
+    if (A._dbIdentityKey === _key) return;
+    A._dbIdentityKey = _key;
+    try {
+      var q = function (db, sql) {
+        try { var r = db.exec(sql); return (r.length && r[0].values.length) ? r[0].values[0][0] : 0; }
+        catch (e) { return null; }             // null = table absent (distinct from a real 0)
+      };
+      var meta = A.db ? q(A.db, 'SELECT COUNT(*) FROM elements_meta;') : null;
+      var inst = A.db ? q(A.db, 'SELECT COUNT(*) FROM element_instances;') : null;
+      var lib = A.libDb || A.db;
+      var geoRows = lib ? q(lib, 'SELECT COUNT(*) FROM component_geometries;') : null;
+      // Coverage across the resolved PAIR — the authoritative figure. A bare per-file geometry row
+      // count reads a healthy split pair (meta db + separate geo db) as broken; that misread cost a
+      // full session on Hospital_ARC.db (§S0(a) 2026-07-20).
+      var covered = 0;
+      if (geoRows && A.db) {
+        if (lib === A.db) {
+          covered = q(A.db, 'SELECT COUNT(*) FROM element_instances i WHERE EXISTS' +
+            '(SELECT 1 FROM component_geometries g WHERE g.geometry_hash = i.geometry_hash);');
+        } else {
+          var have = {}, hr = null;
+          try { hr = lib.exec('SELECT geometry_hash FROM component_geometries;'); } catch (e) { hr = null; }
+          if (hr && hr.length) for (var h = 0; h < hr[0].values.length; h++) have[hr[0].values[h][0]] = 1;
+          var ir = null;
+          try { ir = A.db.exec('SELECT geometry_hash FROM element_instances;'); } catch (e) { ir = null; }
+          if (ir && ir.length) for (var j = 0; j < ir[0].values.length; j++) if (have[ir[0].values[j][0]]) covered++;
+        }
+      }
+      var line = '§DB_IDENTITY name=' + (A.activeBuilding || '?') + ' path=' + (A.DB_URL || '?') +
+        ' meta=' + meta + ' inst=' + inst + ' geo=' + covered + '/' + inst +
+        ' libDb=' + (lib === A.db ? 'self(meta)' : 'separate') + ' libRows=' + geoRows +
+        // The OCI self-heal fires for ANY building asset (positions.bin, geo.db, the db itself), so
+        // report WHICH assets healed rather than a bare yes/no — "healed" next to a db path would
+        // otherwise read as "the DB was swapped" when only a positions file was.
+        ' healedAssets=' + (A._ociHealed && A._ociHealed.length ? '[' + A._ociHealed.join(',') + ']' : 'none') +
+        ' at=' + (tag || '?');
+      if (inst > 0 && covered === 0) {
+        console.warn(line + ' — ZERO geometry resolves for ' + inst + ' instances: every element will' +
+          ' render as a bbox proxy (GEOMETRY_TRUTH_CHAIN.md §S0(c))');
+      } else console.log(line);
+    } catch (e) { console.warn('§DB_IDENTITY failed — ' + (e && e.message)); }
+  };
+
   A.startStreaming = function() {
     let nearest = null, nearestDist = Infinity;
     for (const [name, bc] of Object.entries(A.buildingCentres)) {
@@ -1825,6 +1886,7 @@ function setupStreaming(A) {
         var _geoMB = (geoBuf.byteLength / 1024 / 1024).toFixed(0);
         var _src = _geoCached ? 'cache' : 'download';
         console.log(`§SPLIT_GEO_LOADED src=${_src} size=${_geoMB}MB ms=${_geoMs}`);
+        A._dbIdentity('split-geo');   // §S2
         A.status.textContent = `Geometry ready (${_geoMB}MB, ${(_geoMs/1000).toFixed(1)}s). Streaming meshes...`;
         _geoOk = true;
       } catch(_geoErr) {
@@ -1836,10 +1898,12 @@ function setupStreaming(A) {
           A.libDb = new SQL.Database(new Uint8Array(_extBuf));
           A._splitHasMeta = false;
           console.log(`§SPLIT_GEO_FALLBACK_EXTRACTED url=${A.DB_URL} size=${(_extBuf.byteLength/1024/1024).toFixed(1)}MB`);
+          A._dbIdentity('split-fallback-extracted');   // §S2
           A.status.textContent = 'Geometry loaded from extracted DB (fallback). Streaming meshes...';
           _geoOk = true;
         } catch(_extErr) {
           console.log(`§SPLIT_GEO_FALLBACK_META err=${_extErr.message} — using meta.db (bboxes only)`);
+          A._dbIdentity('split-fallback-meta');   // §S2 — the viewer's silent-box state, now stated
           A.libDb = A.db;
           A._splitHasMeta = true;
           A.status.textContent = 'Geometry unavailable — showing bounding boxes only.';
@@ -2073,6 +2137,7 @@ function setupStreaming(A) {
       await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); });
       A.libDb = A.db;
       console.log('[S241] §BBOX_PAINT_YIELD bboxes painted; enabling mesh stream');
+      A._dbIdentity('single-db');   // §S2
     }
   };
 
