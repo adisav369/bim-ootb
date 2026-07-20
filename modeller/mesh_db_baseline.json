@@ -1,0 +1,57 @@
+{
+  "_spec": "GEOMETRY_TRUTH_CHAIN.md — mesh.db is FROZEN. Regenerate ONLY via --baseline with a reviewed reason.",
+  "total": 9198,
+  "sizeBytes": 120025088,
+  "buildings": {
+    "Clinic_Architectural_IFC2x3": {
+      "geometries": 1467,
+      "boxGeometries": 844,
+      "boxPct": 57.53
+    },
+    "DeviceLibrary_residential": {
+      "geometries": 13,
+      "boxGeometries": 0,
+      "boxPct": 0
+    },
+    "Duplex_ARC": {
+      "geometries": 155,
+      "boxGeometries": 47,
+      "boxPct": 30.32
+    },
+    "HospitalGarage_ARC": {
+      "geometries": 476,
+      "boxGeometries": 277,
+      "boxPct": 58.19
+    },
+    "Hospital_IFC4_ARC": {
+      "geometries": 3568,
+      "boxGeometries": 1844,
+      "boxPct": 51.68
+    },
+    "Ifc2x3_SampleCastle": {
+      "geometries": 1924,
+      "boxGeometries": 869,
+      "boxPct": 45.17
+    },
+    "SampleHouse_ARC": {
+      "geometries": 46,
+      "boxGeometries": 15,
+      "boxPct": 32.61
+    },
+    "TerminalMerged": {
+      "geometries": 917,
+      "boxGeometries": 296,
+      "boxPct": 32.28
+    },
+    "TerminalMerged_rules": {
+      "geometries": 13,
+      "boxGeometries": 3,
+      "boxPct": 23.08
+    },
+    "opensourceBIM_HHS_Office_architect": {
+      "geometries": 619,
+      "boxGeometries": 347,
+      "boxPct": 56.06
+    }
+  }
+}
