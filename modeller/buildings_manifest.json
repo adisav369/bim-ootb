@@ -1,7 +1,7 @@
 {
   "_spec": "GEOMETRY_TRUTH_CHAIN.md §S1 — generated, never hand-edited. Regenerate: node scripts/gen_buildings_manifest.js",
   "_note": "geoCovered/geoMissing are the JOIN across the (meta db, geo substrate) PAIR. geoRowsInMetaDb=0 is HEALTHY for ARC residents.",
-  "generated": "2026-07-19",
+  "generated": "2026-07-20",
   "substrates": {
     "mesh.db": {
       "geometries": 9198
@@ -19,6 +19,7 @@
       "geoSubstrate": "mesh.db",
       "geoCovered": 58,
       "geoMissing": 0,
+      "boxInstancesExpected": 22,
       "coveragePct": 100
     },
     {
@@ -32,6 +33,7 @@
       "geoSubstrate": "mesh.db",
       "geoCovered": 215,
       "geoMissing": 0,
+      "boxInstancesExpected": 55,
       "coveragePct": 100
     },
     {
@@ -45,6 +47,7 @@
       "geoSubstrate": "mesh.db",
       "geoCovered": 3225,
       "geoMissing": 0,
+      "boxInstancesExpected": 1501,
       "coveragePct": 100
     },
     {
@@ -58,6 +61,7 @@
       "geoSubstrate": "mesh.db",
       "geoCovered": 2527,
       "geoMissing": 0,
+      "boxInstancesExpected": 975,
       "coveragePct": 100
     },
     {
@@ -71,6 +75,7 @@
       "geoSubstrate": "mesh.db",
       "geoCovered": 2586,
       "geoMissing": 0,
+      "boxInstancesExpected": 1524,
       "coveragePct": 100
     },
     {
@@ -84,6 +89,7 @@
       "geoSubstrate": "mesh.db",
       "geoCovered": 14409,
       "geoMissing": 0,
+      "boxInstancesExpected": 8373,
       "coveragePct": 100
     },
     {
@@ -97,6 +103,7 @@
       "geoSubstrate": "mesh.db",
       "geoCovered": 1252,
       "geoMissing": 0,
+      "boxInstancesExpected": 669,
       "coveragePct": 100
     },
     {
@@ -110,6 +117,7 @@
       "geoSubstrate": "mesh.db",
       "geoCovered": 35552,
       "geoMissing": 0,
+      "boxInstancesExpected": 710,
       "coveragePct": 100
     }
   ]

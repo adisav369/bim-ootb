@@ -86,6 +86,16 @@ function describe(res) {
       `WHERE EXISTS(SELECT 1 FROM m.component_geometries g WHERE g.geometry_hash = i.geometry_hash);`);
     rec.geoMissing = (rec.instances != null && rec.geoCovered != null) ? rec.instances - rec.geoCovered : null;
   }
+  // §S3-SHARP (2026-07-20): how many instances' REAL mesh is genuinely a 12-triangle box.
+  // SampleCastle measured 1,501 here and rendered 1,498 boxes — i.e. its ~46% box population is
+  // FAITHFUL source data, not proxy leakage. Without this expected figure the render census can
+  // only report a mean, and a mean hides a bimodal population (73.6 avg "looked REAL" while half
+  // the elements were boxes). Rendered-vs-expected is the sharp test: rendered > expected = proxies.
+  if (fs.existsSync(geoPath) && rec.instances) {
+    rec.boxInstancesExpected = count(dbPath,
+      `ATTACH '${geoPath}' AS m; SELECT COUNT(*) FROM element_instances i ` +
+      `JOIN m.component_geometries g ON g.geometry_hash = i.geometry_hash WHERE length(g.faces) <= 144;`);
+  }
   rec.coveragePct = (rec.instances > 0 && rec.geoCovered != null)
     ? +(100 * rec.geoCovered / rec.instances).toFixed(2) : null;
   return rec;
