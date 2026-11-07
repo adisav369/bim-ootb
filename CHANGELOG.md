@@ -4,6 +4,32 @@ All notable, user-facing changes are batched here by [release-please](https://gi
 from our conventional-commit prefixes (`feat` → minor, `fix`/`docs` → patch, `feat!`/`BREAKING CHANGE` → major).
 The per-deploy build id (`erp/sw.js` `CACHE_VERSION` = `vNNN`) is separate — a cache-bust id, not a release.
 
+## [1.85.0](https://github.com/adisav369/bim-ootb/compare/v1.84.0...v1.85.0) (2026-11-07)
+
+
+### ✨ Features
+
+* **erp:** AS-6 Doc_InOut batch-lot reversal (findReversalCostDetailAmt, Doc_InOut.java:330-380) + MInOut manual MA quantity (W-ASI-BATCHREV) ([#2283](https://github.com/adisav369/bim-ootb/issues/2283)) ([078d544](https://github.com/adisav369/bim-ootb/commit/078d5441454e97206c504f09ef97a9c2c01c189c))
+* **erp:** AS-7 MMovement.prepareIt mandatory ASI (IDEMPIERE-1770, MMovement.java:317-352) through the one asiMandatoryFor rule (W-ASI-MOVEMANDATORY) ([#2282](https://github.com/adisav369/bim-ootb/issues/2282)) ([cfc1591](https://github.com/adisav369/bim-ootb/commit/cfc15918ab07eca937514ea2089a95924f00e4da))
+* **erp:** AS-8 ONE MStorageOnHand.getWarehouse / getWarehouseNegative, reading through the Trx (W-ASI-STORAGE, ERP_PRODUCT_ATTRIBUTE_ASI.md AS-8) ([#2278](https://github.com/adisav369/bim-ootb/issues/2278)) ([aa88d4b](https://github.com/adisav369/bim-ootb/commit/aa88d4b2c4e0d316500dcf36fe83f90594f69d1e))
+* **erp:** Attribute Set Instance creation - one PAttribute editor + model (W-ASI-CREATE, ERP_PRODUCT_ATTRIBUTE_ASI.md AS-1) ([#2268](https://github.com/adisav369/bim-ootb/issues/2268)) ([34e98d7](https://github.com/adisav369/bim-ootb/commit/34e98d71a05778e33b6ecf7a2d97671e20d30097))
+* **erp:** MInventory model + Doc_Inventory posting; confirm Difference/Scrapped Qty creates the inventory documents (W-INVENTORY, ERP_FRIENDLY_OPS_LENS.md §67) ([#2274](https://github.com/adisav369/bim-ootb/issues/2274)) ([6cac837](https://github.com/adisav369/bim-ootb/commit/6cac8376ee74d70e882a43a5826f56d6bbbb3d79))
+* **erp:** one mandatory-ASI rule for order and shipment (W-ASI-MANDATORY, ERP_PRODUCT_ATTRIBUTE_ASI.md AS-2) ([#2269](https://github.com/adisav369/bim-ootb/issues/2269)) ([09acbbf](https://github.com/adisav369/bim-ootb/commit/09acbbfaa3fef67171cdb43a404441de1c6b270f))
+* **erp:** port ReplenishReportProduction (AD_Process 53267) + one QtyToOrder calc shared with the POS lens (W-REPLENISH, ERP_FRIENDLY_OPS_LENS.md §64) ([#2266](https://github.com/adisav369/bim-ootb/issues/2266)) ([e24ef2f](https://github.com/adisav369/bim-ootb/commit/e24ef2f1ac50fb46e8b30ad411783415ca9df95a))
+* **erp:** receipts fill negative stock first + auto-generate lot (W-ASI-RECEIPT, ERP_PRODUCT_ATTRIBUTE_ASI.md AS-4) ([#2272](https://github.com/adisav369/bim-ootb/issues/2272)) ([2b54d01](https://github.com/adisav369/bim-ootb/commit/2b54d018e61b0614c30f968c5244908c83267bb2))
+* **erp:** shipment picks instances by getWarehouse - guarantee dates, priority, tie-break (W-ASI-POLICY, ERP_PRODUCT_ATTRIBUTE_ASI.md AS-3) ([#2270](https://github.com/adisav369/bim-ootb/issues/2270)) ([86bf8a4](https://github.com/adisav369/bim-ootb/commit/86bf8a4493ef00df2ca7ed39618f59bd8e25f858))
+* **erp:** Test Harness button (Terms) — recorded terms-v1 witness run, open terms first, never green; W-TEAM-TERMS 12/0, mutants 4/4; sw v937 ([#2450](https://github.com/adisav369/bim-ootb/issues/2450)) ([4cefa8c](https://github.com/adisav369/bim-ootb/commit/4cefa8cfc8ed19264db4b7470a7d469db42764a0))
+
+
+### 🐛 Fixes
+
+* **erp:** a detail tab whose dictionary read failed shows no rows, never every parent's (§MD-UPSTREAM) ([#2641](https://github.com/adisav369/bim-ootb/issues/2641)) ([4775f15](https://github.com/adisav369/bim-ootb/commit/4775f156bfe5ad421be4f034faa2985e5672f074))
+
+
+### ⚡ Performance
+
+* **erp:** head-office hot spots HS1-HS3 (login ctx once, roster once per pass, index overlay) ([#2449](https://github.com/adisav369/bim-ootb/issues/2449)) ([d342e70](https://github.com/adisav369/bim-ootb/commit/d342e708a6baba17256f049ca4efedfab76669ed))
+
 ## [1.84.0](https://github.com/red1oon/bim-ootb/compare/v1.83.0...v1.84.0) (2026-10-31)
 
 
